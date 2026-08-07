@@ -1,4 +1,4 @@
-# Teams MCP Server
+# Microsoft Teams MCP Server
 
 MCP server for Microsoft Teams — search, message, and manage chats with browser-session auth; no Teams app approval or Azure AD registration.
 
