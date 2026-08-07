@@ -1,0 +1,51 @@
+{
+  "name": "msteams-mcp",
+  "version": "1.2.0",
+  "description": "MCP server for Microsoft Teams - search messages, send replies, manage favourites",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "msteams-mcp": "dist/index.js",
+    "msteams": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hickeroar/msteams-mcp.git"
+  },
+  "homepage": "https://github.com/hickeroar/msteams-mcp",
+  "bugs": {
+    "url": "https://github.com/hickeroar/msteams-mcp/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "cli": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "mcp",
+    "microsoft-teams",
+    "playwright",
+    "browser-automation"
+  ],
+  "author": "hickeroar",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "playwright": "^1.40.0",
+    "zod": "~3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0"
+  }
+}
