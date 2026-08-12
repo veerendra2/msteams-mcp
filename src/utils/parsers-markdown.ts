@@ -53,9 +53,32 @@ function convertInlineFormatting(line: string): string {
  * - Newlines → paragraph breaks
  * - Ordered lists (1. item) → <ol><li>
  * - Unordered lists (- item, * item) → <ul><li>
- * 
+ *
  * Plain text without any formatting is returned as-is (HTML-escaped).
  */
+/**
+ * Empty paragraph placed between two adjacent paragraphs.
+ *
+ * Teams renders `<p>a</p><p>b</p>` with the two lines tight against each other. A person
+ * typing in the Teams client and pressing Enter twice gets an empty spacer paragraph, which
+ * is what produces the blank line they expect between paragraphs, so a markdown paragraph
+ * break emits the same thing. Lists and code blocks are left flush against the surrounding
+ * text, matching how the client formats them.
+ */
+const PARAGRAPH_SPACER = '<p>&nbsp;</p>'
+
+/** Joins top-level blocks, inserting a spacer between any two adjacent paragraphs. */
+function joinBlocks(parts: string[]): string {
+  let html = '';
+  for (let i = 0; i < parts.length; i++) {
+    if (i > 0 && parts[i - 1].endsWith('</p>') && parts[i].startsWith('<p>')) {
+      html += PARAGRAPH_SPACER;
+    }
+    html += parts[i];
+  }
+  return html;
+}
+
 export function markdownToTeamsHtml(text: string): string {
   // Handle fenced code blocks first (```...```)
   // Split text into code blocks and non-code-block segments
@@ -120,7 +143,7 @@ export function markdownToTeamsHtml(text: string): string {
     }
   }
   
-  return htmlParts.join('') || '<p></p>';
+  return joinBlocks(htmlParts) || '<p></p>';
 }
 
 /**
