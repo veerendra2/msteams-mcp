@@ -4,6 +4,7 @@
  * This barrel module re-exports all parser submodules for backward compatibility.
  * Implementations are split into focused submodules:
  * - parsers-html: HTML stripping, link extraction, escaping
+ * - parsers-cards: SWIFT Adaptive Card decoding (Workflows / Media_Card)
  * - parsers-markdown: Markdown to Teams HTML conversion
  * - parsers-identifiers: Message links, conversation types, ID extraction, timestamps
  * - parsers-search: Teams message and email search result parsing
@@ -14,6 +15,7 @@
  */
 
 export { extractLinks, stripHtml, stripHtmlInline, escapeHtmlChars, sanitizeLinkUrl, type ExtractedLink } from './parsers-html.js';
+export { decodeSwiftAdaptiveCard, isUnsupportedCardPlaceholderUrl } from './parsers-cards.js';
 export { markdownToTeamsHtml, hasMarkdownFormatting } from './parsers-markdown.js';
 export {
   getConversationType,

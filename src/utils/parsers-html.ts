@@ -3,6 +3,7 @@
  */
 
 import type { ExtractedLink } from '../types/teams.js';
+import { decodeSwiftAdaptiveCard, isUnsupportedCardPlaceholderUrl } from './parsers-cards.js';
 
 // Re-export ExtractedLink so existing imports from parsers.ts continue to work
 export type { ExtractedLink };
@@ -11,18 +12,23 @@ export type { ExtractedLink };
  * Extracts links from HTML content before stripping.
  * Returns an array of { url, text, contentType? } objects.
  *
- * Parses both:
+ * Parses:
  * - <a href="...">text</a> - standard HTML links
  * - <item type="..." uri="..."> - Teams recording/transcript URIs (amsTranscript, onedriveForBusinessVideo, etc.)
  *   Handles type and uri in either order.
+ * - Adaptive Card Action.OpenUrl from a SWIFT `<Swift b64="…">` payload (Workflows cards).
  */
 export function extractLinks(html: string): ExtractedLink[] {
   const links: ExtractedLink[] = [];
+  const card = decodeSwiftAdaptiveCard(html);
+  if (card) {
+    links.push(...card.links);
+  }
 
   // <a href="...">text</a> - standard HTML links
   for (const m of html.matchAll(/<a\s+[^>]*href=["'](?<url>[^"']+)["'][^>]*>(?<text>[\s\S]*?)<\/a>/gi)) {
     const { url, text } = m.groups!;
-    if (url && !url.startsWith('javascript:')) {
+    if (url && !url.startsWith('javascript:') && !isUnsupportedCardPlaceholderUrl(url)) {
       links.push({ url, text: stripHtmlInline(text) || url });
     }
   }
@@ -91,9 +97,17 @@ const ENTITIES: [RegExp, string][] = [
  * capped at one, but leading indentation is kept so fenced code blocks remain
  * readable.
  *
+ * SWIFT / Adaptive Card bodies (`<Swift b64="…">`) are decoded to plain text
+ * (title, facts, action URLs) instead of the "cards.unsupported" placeholder.
+ *
  * Use {@link stripHtmlInline} where the result has to occupy a single line.
  */
 export function stripHtml(html: string): string {
+  const card = decodeSwiftAdaptiveCard(html);
+  if (card) {
+    return card.text;
+  }
+
   let text = html.replace(/\r\n?/g, '\n');
 
   for (const [pattern, replacement] of BLOCK_BREAKS) {
