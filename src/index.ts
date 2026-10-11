@@ -8,9 +8,11 @@
  * initial authentication.
  */
 
-import { runServer } from './server.js';
+import { runHttpServer, runServer } from './server.js';
 
-runServer().catch((error) => {
+const start = process.env.MSTEAMS_TRANSPORT === 'http' ? runHttpServer : runServer;
+
+start().catch((error) => {
   console.error('Fatal error:', error);
   process.exit(1);
 });

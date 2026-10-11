@@ -1,0 +1,10 @@
+.git
+.github
+node_modules
+dist
+debug-output
+tmp
+examples
+notes
+private
+*.log

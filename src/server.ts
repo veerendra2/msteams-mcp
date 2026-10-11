@@ -4,7 +4,9 @@
  */
 
 import { createRequire } from 'module';
+import { createServer as createHttpServer } from 'node:http';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { version: string };
@@ -456,6 +458,66 @@ export async function runServer(): Promise<void> {
     } catch (err) {
       // Best-effort cleanup — log but don't block shutdown
       console.error('[shutdown] cleanup error (ignored):', err);
+    }
+    process.exit(0);
+  };
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
+
+/**
+ * Runs the server over Streamable HTTP.
+ * The caller controls host binding; Docker uses 0.0.0.0 inside the container
+ * while Compose restricts the published host port to loopback.
+ */
+export async function runHttpServer(
+  host = process.env.MSTEAMS_HTTP_HOST ?? '127.0.0.1',
+  port = Number(process.env.MSTEAMS_HTTP_PORT ?? '21000'),
+): Promise<void> {
+  const teamsServer = new TeamsServer();
+  const mcpServer = await teamsServer.createServer();
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+  });
+
+  await mcpServer.connect(transport);
+
+  const httpServer = createHttpServer((req, res) => {
+    const requestUrl = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+    if (requestUrl.pathname !== '/mcp') {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Not found');
+      return;
+    }
+
+    transport.handleRequest(req, res).catch((error) => {
+      log.error('http', `MCP request failed: ${error instanceof Error ? error.message : String(error)}`);
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+      }
+      if (!res.writableEnded) {
+        res.end(JSON.stringify({ error: 'MCP request failed' }));
+      }
+    });
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once('error', reject);
+    httpServer.listen(port, host, () => {
+      httpServer.off('error', reject);
+      log.info('http', `MCP server listening on http://${host}:${port}/mcp`);
+      resolve();
+    });
+  });
+
+  const shutdown = async () => {
+    try {
+      await transport.close();
+      await teamsServer.cleanup();
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    } catch (error) {
+      log.error('shutdown', `HTTP cleanup error: ${error instanceof Error ? error.message : String(error)}`);
     }
     process.exit(0);
   };
