@@ -84,6 +84,7 @@ Build and run the stdio server with the persistent Teams session mounted outside
 ```bash
 docker build -t msteams-mcp .
 docker run --rm -i \
+  --hostname msteams-mcp \
   -v msteams-mcp-data:/home/pwuser/.teams-mcp-server \
   msteams-mcp
 ```

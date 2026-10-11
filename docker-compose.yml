@@ -2,6 +2,7 @@ services:
   msteams-mcp:
     build: .
     image: msteams-mcp:local
+    hostname: msteams-mcp
     environment:
       MSTEAMS_TRANSPORT: http
       MSTEAMS_HTTP_HOST: 0.0.0.0

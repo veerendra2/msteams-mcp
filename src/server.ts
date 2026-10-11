@@ -4,6 +4,7 @@
  */
 
 import { createRequire } from 'module';
+import { randomUUID } from 'node:crypto';
 import { createServer as createHttpServer } from 'node:http';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -475,13 +476,20 @@ export async function runHttpServer(
   host = process.env.MSTEAMS_HTTP_HOST ?? '127.0.0.1',
   port = Number(process.env.MSTEAMS_HTTP_PORT ?? '21000'),
 ): Promise<void> {
-  const teamsServer = new TeamsServer();
-  const mcpServer = await teamsServer.createServer();
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-  });
+  const sessions = new Map<string, {
+    teamsServer: TeamsServer;
+    transport: StreamableHTTPServerTransport;
+  }>();
 
-  await mcpServer.connect(transport);
+  const createSession = async () => {
+    const teamsServer = new TeamsServer();
+    const mcpServer = await teamsServer.createServer();
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: randomUUID,
+    });
+    await mcpServer.connect(transport);
+    return { teamsServer, transport };
+  };
 
   const httpServer = createHttpServer((req, res) => {
     const requestUrl = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
@@ -491,7 +499,24 @@ export async function runHttpServer(
       return;
     }
 
-    transport.handleRequest(req, res).catch((error) => {
+    void (async () => {
+      const header = req.headers['mcp-session-id'];
+      const sessionId = Array.isArray(header) ? header[0] : header;
+      let session = sessionId ? sessions.get(sessionId) : undefined;
+
+      if (sessionId && !session) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'MCP session not found' }));
+        return;
+      }
+
+      session ??= await createSession();
+      await session.transport.handleRequest(req, res);
+
+      if (session.transport.sessionId) {
+        sessions.set(session.transport.sessionId, session);
+      }
+    })().catch((error) => {
       log.error('http', `MCP request failed: ${error instanceof Error ? error.message : String(error)}`);
       if (!res.headersSent) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -513,8 +538,10 @@ export async function runHttpServer(
 
   const shutdown = async () => {
     try {
-      await transport.close();
-      await teamsServer.cleanup();
+      for (const session of sessions.values()) {
+        await session.transport.close();
+        await session.teamsServer.cleanup();
+      }
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
     } catch (error) {
       log.error('shutdown', `HTTP cleanup error: ${error instanceof Error ? error.message : String(error)}`);
