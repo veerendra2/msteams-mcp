@@ -77,6 +77,30 @@ npm run cli -- find_channel --query "general"
 
 The CLI shares the same session as the MCP server and is handy for debugging outside any AI client.
 
+## Docker
+
+Build and run the stdio server with the persistent Teams session mounted outside the container:
+
+```bash
+docker build -t msteams-mcp .
+docker run --rm -i \
+  --hostname msteams-mcp \
+  -v msteams-mcp-data:/home/pwuser/.teams-mcp-server \
+  msteams-mcp
+```
+
+The image uses the Chromium browser bundled in the Playwright base image. The volume keeps the encrypted session, token cache, and browser profile across runs. Initial interactive login still requires a browser display inside the container; display forwarding is not included here. A host session cannot simply be copied into the volume because the stored encryption key is machine- and user-specific.
+
+To run the server over unauthenticated Streamable HTTP on the host loopback interface:
+
+```bash
+docker compose up --build
+```
+
+The MCP endpoint is `http://127.0.0.1:21000/mcp`. Authentication is intentionally disabled; do not change the port binding to `0.0.0.0` unless an authentication layer is added first. Compose enables `MSTEAMS_READ_ONLY=true`, which advertises and enforces only read-only tools. Remove that setting only when write tools are deliberately required.
+
+For any deployment, set `MSTEAMS_READ_ONLY=true` to enable the same allowlist. The default remains unchanged for existing stdio users.
+
 ## Available tools
 
 ### Search & discovery

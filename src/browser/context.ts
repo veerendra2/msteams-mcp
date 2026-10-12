@@ -288,7 +288,11 @@ export async function ensureBrowserProfileUnlocked(): Promise<void> {
  * 
  * @returns The browser channel name for Playwright
  */
-function getBrowserChannel(): 'msedge' | 'chrome' {
+function getBrowserChannel(): 'msedge' | 'chrome' | 'chromium' {
+  const configured = process.env.MSTEAMS_BROWSER_CHANNEL;
+  if (configured === 'chrome' || configured === 'chromium' || configured === 'msedge') {
+    return configured;
+  }
   return process.platform === 'win32' ? 'msedge' : 'chrome';
 }
 
@@ -361,9 +365,15 @@ export async function createBrowserContext(
       }
     }
 
-    const browserName = channel === 'msedge' ? 'Microsoft Edge' : 'Google Chrome';
+    const browserName = channel === 'msedge'
+      ? 'Microsoft Edge'
+      : channel === 'chromium'
+        ? 'Chromium'
+        : 'Google Chrome';
     const installHint = channel === 'msedge'
       ? 'Edge should be pre-installed on Windows. Try updating Windows or reinstalling Edge.'
+      : channel === 'chromium'
+        ? 'Install the Playwright Chromium browser with: npx playwright install chromium'
       : 'Install Chrome from https://www.google.com/chrome/ or run: npx playwright install chromium';
 
     throw new Error(

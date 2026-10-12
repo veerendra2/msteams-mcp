@@ -1,0 +1,18 @@
+services:
+  msteams-mcp:
+    build: .
+    image: msteams-mcp:local
+    hostname: msteams-mcp
+    environment:
+      MSTEAMS_TRANSPORT: http
+      MSTEAMS_HTTP_HOST: 0.0.0.0
+      MSTEAMS_HTTP_PORT: 21000
+      MSTEAMS_READ_ONLY: "true"
+    ports:
+      - "127.0.0.1:21000:21000"
+    volumes:
+      - msteams-mcp-data:/home/pwuser/.teams-mcp-server
+    init: true
+
+volumes:
+  msteams-mcp-data:

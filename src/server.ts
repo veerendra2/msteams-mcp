@@ -4,7 +4,10 @@
  */
 
 import { createRequire } from 'module';
+import { randomUUID } from 'node:crypto';
+import { createServer as createHttpServer } from 'node:http';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { version: string };
@@ -37,13 +40,47 @@ import { refreshTokensViaBrowser } from './auth/token-refresh.js';
 import { getFavorites } from './api/csa-api.js';
 
 // Tool registry
-import { getToolDefinitions, invokeTool } from './tools/registry.js';
+import { getToolDefinitions, invokeTool, readOnlyEnabled } from './tools/registry.js';
 import type { ToolContext } from './tools/index.js';
 
 // Types
 import { ErrorCode, createError, type McpError } from './types/errors.js';
 import * as log from './utils/logger.js';
 import type { TeamsServer as ITeamsServer } from './types/server.js';
+
+let autoLoginInProgress: Promise<boolean> | null = null;
+
+type HttpSession = {
+  teamsServer: TeamsServer;
+  transport: StreamableHTTPServerTransport;
+  cleanupPromise: Promise<void> | null;
+};
+
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
+}
+
+function isAllowedHost(header: string | undefined, bindHost: string, port: number): boolean {
+  if (!header) return false;
+  try {
+    const parsed = new URL(`http://${header}`);
+    const effectivePort = parsed.port || '80';
+    return effectivePort === String(port) &&
+      (isLoopbackHost(parsed.hostname) || (bindHost !== '0.0.0.0' && parsed.hostname === bindHost));
+  } catch {
+    return false;
+  }
+}
+
+function isAllowedOrigin(header: string | undefined): boolean {
+  if (!header) return true;
+  try {
+    const origin = new URL(header);
+    return (origin.protocol === 'http:' || origin.protocol === 'https:') && isLoopbackHost(origin.hostname);
+  } catch {
+    return false;
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MCP Server Class
@@ -171,23 +208,20 @@ export class TeamsServer implements ITeamsServer {
     return TeamsServer.AUTH_TOOL_NAMES.has(name);
   }
 
-  /** Deduplicates concurrent auto-login attempts. */
-  private autoLoginInProgress: Promise<boolean> | null = null;
-
   /**
    * Attempts automatic re-authentication via headless browser.
    * Returns true if login succeeded and tokens are now available.
    * Concurrent calls are deduplicated — only one login runs at a time.
    */
   private async attemptAutoLogin(): Promise<boolean> {
-    if (this.autoLoginInProgress) {
-      return this.autoLoginInProgress;
+    if (autoLoginInProgress) {
+      return autoLoginInProgress;
     }
-    this.autoLoginInProgress = this._attemptAutoLoginImpl();
+    autoLoginInProgress = this._attemptAutoLoginImpl();
     try {
-      return await this.autoLoginInProgress;
+      return await autoLoginInProgress;
     } finally {
-      this.autoLoginInProgress = null;
+      autoLoginInProgress = null;
     }
   }
 
@@ -376,6 +410,17 @@ export class TeamsServer implements ITeamsServer {
           return this.formatSuccess(result.data);
         }
 
+        if (this.isAuthError(result.error) && readOnlyEnabled) {
+          return this.formatError(createError(
+            result.error.code,
+            `${result.error.message} Read-only mode disables Teams authentication and automatic re-authentication.`,
+            {
+              retryable: false,
+              suggestions: ['Authenticate before starting the server, then retry the request'],
+            }
+          ));
+        }
+
         // Auto-login retry for auth errors (skip for login/status tools themselves)
         if (this.isAuthError(result.error) && !this.isAuthTool(name)) {
           log.warn('auto-login', `Tool '${name}' returned ${result.error.code}, attempting automatic re-authentication...`);
@@ -456,6 +501,109 @@ export async function runServer(): Promise<void> {
     } catch (err) {
       // Best-effort cleanup — log but don't block shutdown
       console.error('[shutdown] cleanup error (ignored):', err);
+    }
+    process.exit(0);
+  };
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
+
+/**
+ * Runs the server over Streamable HTTP.
+ * The caller controls host binding; Docker uses 0.0.0.0 inside the container
+ * while Compose restricts the published host port to loopback.
+ */
+export async function runHttpServer(
+  host = process.env.MSTEAMS_HTTP_HOST ?? '127.0.0.1',
+  port = Number(process.env.MSTEAMS_HTTP_PORT ?? '21000'),
+): Promise<void> {
+  const sessions = new Map<string, HttpSession>();
+
+  const createSession = async () => {
+    const teamsServer = new TeamsServer();
+    const mcpServer = await teamsServer.createServer();
+    let session: HttpSession;
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: randomUUID,
+      onsessioninitialized: () => {
+        if (transport.sessionId) sessions.set(transport.sessionId, session);
+      },
+      onsessionclosed: () => {
+        void cleanupSession(session);
+      },
+    });
+    session = { teamsServer, transport, cleanupPromise: null };
+    await mcpServer.connect(transport);
+    return session;
+  };
+
+  const cleanupSession = (session: HttpSession): Promise<void> => {
+    if (!session.cleanupPromise) {
+      session.cleanupPromise = (async () => {
+        if (session.transport.sessionId) sessions.delete(session.transport.sessionId);
+        await session.teamsServer.cleanup();
+      })();
+    }
+    return session.cleanupPromise;
+  };
+
+  const httpServer = createHttpServer((req, res) => {
+    if (!isAllowedHost(req.headers.host, host, port) || !isAllowedOrigin(req.headers.origin)) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Invalid Host or Origin' }));
+      return;
+    }
+
+    const requestUrl = new URL(req.url ?? '/', 'http://127.0.0.1');
+    if (requestUrl.pathname !== '/mcp') {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Not found');
+      return;
+    }
+
+    void (async () => {
+      const header = req.headers['mcp-session-id'];
+      const sessionId = Array.isArray(header) ? header[0] : header;
+      let session = sessionId ? sessions.get(sessionId) : undefined;
+
+      if (sessionId && !session) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'MCP session not found' }));
+        return;
+      }
+
+      session ??= await createSession();
+      await session.transport.handleRequest(req, res);
+    })().catch((error) => {
+      log.error('http', `MCP request failed: ${error instanceof Error ? error.message : String(error)}`);
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+      }
+      if (!res.writableEnded) {
+        res.end(JSON.stringify({ error: 'MCP request failed' }));
+      }
+    });
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once('error', reject);
+    httpServer.listen(port, host, () => {
+      httpServer.off('error', reject);
+      log.info('http', `MCP server listening on http://${host}:${port}/mcp`);
+      resolve();
+    });
+  });
+
+  const shutdown = async () => {
+    try {
+      for (const session of sessions.values()) {
+        await session.transport.close();
+        await cleanupSession(session);
+      }
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    } catch (error) {
+      log.error('shutdown', `HTTP cleanup error: ${error instanceof Error ? error.message : String(error)}`);
     }
     process.exit(0);
   };
