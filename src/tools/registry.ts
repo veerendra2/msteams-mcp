@@ -71,7 +71,7 @@ const READ_ONLY_TOOL_NAMES = new Set([
   'teams_get_tags',
 ]);
 
-const readOnlyEnabled = process.env.MSTEAMS_READ_ONLY === 'true';
+export const readOnlyEnabled = process.env.MSTEAMS_READ_ONLY === 'true';
 
 function isToolAvailable(name: string): boolean {
   return !readOnlyEnabled || READ_ONLY_TOOL_NAMES.has(name);
